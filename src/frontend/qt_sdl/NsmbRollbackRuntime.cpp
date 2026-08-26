@@ -3,6 +3,7 @@
 #include "NsmbTraceOutput.h"
 
 #include "NDS.h"
+#include "NSMLGameRAMRollback.h"
 #include "Savestate.h"
 
 #include <algorithm>
@@ -577,8 +578,11 @@ bool ResimulateIfNeeded(Context context, const ResimulationHooks &hooks,
       }
     } else {
       const int maxResimFrames =
-          romLoopBackend ? static_cast<int>(kRomLoopHistoryCapacity - 1)
-                         : context.Config.MaxResimFrames;
+          romLoopBackend
+              ? static_cast<int>(
+                    melonDS::NSMLGameRAMRollback::MaxRollbackDepthForHistory(
+                        kRomLoopHistoryCapacity))
+              : context.Config.MaxResimFrames;
       mismatchFrame = RollbackStorage::ClampResimulationMismatch(
           mismatchFrame, frame, maxResimFrames);
       if (mismatchFrame != originalMismatchFrame &&
@@ -634,7 +638,9 @@ bool ResimulateIfNeeded(Context context, const ResimulationHooks &hooks,
   }
 
   if (context.Config.Backend == Config::RollbackBackend::RomLoop) {
-    const melonDS::u32 transactionFrames = frame - restoreFrame + 1;
+    const melonDS::u32 transactionFrames =
+        melonDS::NSMLGameRAMRollback::RequiredHistoryCount(restoreFrame,
+                                                           frame);
     if (transactionFrames == 0 ||
         transactionFrames > kRomLoopHistoryCapacity ||
         checkpoint.GameFrame == kNoFrame ||
@@ -661,8 +667,8 @@ bool ResimulateIfNeeded(Context context, const ResimulationHooks &hooks,
       std::lock_guard<std::mutex> lock(context.Mutex);
       InputTimeline::PredictionProbe probe = PredictionProbe(context.Config);
       probe.RetainConfirmation = false;
-      for (melonDS::u32 replayFrame = restoreFrame; replayFrame <= frame;
-           replayFrame++) {
+      for (melonDS::u32 index = 0; index < transactionFrames; index++) {
+        const melonDS::u32 replayFrame = restoreFrame + index;
         const auto resolved = InputTimeline::ResolveReplayFrameInputs(
             context.Inputs, replayFrame, localPlayer, NeutralInput(), probe);
         if (!resolved)

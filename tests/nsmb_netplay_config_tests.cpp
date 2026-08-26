@@ -649,7 +649,7 @@ void TestRollbackConfigReadsClampsAndDependencies() {
   CHECK(config.TinyCoreFlags == 2047);
   CHECK(config.ResimulateDelayFrames == 30);
   CHECK(config.MaxResimFrames == 0);
-  CHECK(config.PredictionHorizonFrames == 11);
+  CHECK(config.PredictionHorizonFrames == 10);
   CHECK(config.PredictionHorizonTimeoutMs == 100);
   CHECK(config.PhaseRecoveryEnabled);
 }

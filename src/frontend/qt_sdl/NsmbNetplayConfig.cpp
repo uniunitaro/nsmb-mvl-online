@@ -606,7 +606,9 @@ RollbackConfig LoadRollbackConfig(const Environment &environment) {
   config.PredictionHorizonFrames = std::clamp(
       ReadInt(environment,
               "MELONDS_NSML_ROLLBACK_PREDICTION_HORIZON_FRAMES", 0),
-      0, 11);
+      // The 12-entry ROM-loop history includes both the restored frame and
+      // the gate after the current frame, leaving at most ten rollback frames.
+      0, 10);
   config.PredictionHorizonTimeoutMs = std::clamp(
       ReadInt(environment, "MELONDS_NSML_ROLLBACK_HORIZON_TIMEOUT_MS", 7000),
       100, 60000);

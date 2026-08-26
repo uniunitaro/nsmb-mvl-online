@@ -2549,19 +2549,11 @@ void NDS::ApplyNSMLPendingGameRAMRestore()
     const u32 configuredHistoryCount = ARM9Read32(historyCountAddr);
     const u32 historyStartFrame = ARM9Read32(historyStartFrameAddr);
     const u32 preRestoreGameFrame = ARM9Read32(gameFrameAddr);
-    if (preRestoreGameFrame >= historyStartFrame)
-    {
-        // The restore gate is at the start of the current game tick. Replay
-        // every tick from the checkpoint through this still-unexecuted tick.
-        // Omitting the inclusive current tick made each live correction lose
-        // exactly one game frame, so peers with different correction counts
-        // permanently diverged even though every transaction completed.
-        const u32 gateHistoryCount = std::min(
-            configuredHistoryCount,
-            preRestoreGameFrame - historyStartFrame + 1);
-        if (gateHistoryCount != 0)
-            ARM9Write32(historyCountAddr, gateHistoryCount);
-    }
+    // History count is expressed in the generation-local display timeline and
+    // deliberately includes the input gate after the current logical frame.
+    // Clamping it to the pre-restore game frame drops that final tick. A first
+    // correction can appear to recover, but its rebuilt checkpoint ring then
+    // starts the next correction one game tick behind.
 
     std::array<u8, controlLength> control {};
     memcpy(control.data(), MainRAM + controlOffset, control.size());

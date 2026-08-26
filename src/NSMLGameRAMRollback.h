@@ -6,6 +6,24 @@
 namespace melonDS::NSMLGameRAMRollback
 {
 
+constexpr u32 RequiredHistoryCount(u32 restoreFrame, u32 currentFrame)
+{
+    // The restored checkpoint is the state at the start of restoreFrame. The
+    // ROM loop must replay through the input gate after currentFrame so the
+    // corrected checkpoint ring owns the next logical frame as well.
+    if (currentFrame < restoreFrame || currentFrame == 0xFFFFFFFFu)
+        return 0;
+    const u32 rollbackDepth = currentFrame - restoreFrame;
+    if (rollbackDepth > 0xFFFFFFFDu)
+        return 0;
+    return rollbackDepth + 2;
+}
+
+constexpr u32 MaxRollbackDepthForHistory(u32 historyCapacity)
+{
+    return historyCapacity >= 2 ? historyCapacity - 2 : 0;
+}
+
 class CheckpointFrameTimeline
 {
 public:

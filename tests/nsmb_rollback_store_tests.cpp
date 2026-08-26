@@ -19,6 +19,8 @@ using NsmbMvlNetplay::RollbackStorage::StoredState;
 using NsmbMvlNetplay::RollbackStorage::Statistics;
 using melonDS::NSMLGameRAMRollback::CanFinalizeTransaction;
 using melonDS::NSMLGameRAMRollback::CheckpointFrameTimeline;
+using melonDS::NSMLGameRAMRollback::MaxRollbackDepthForHistory;
+using melonDS::NSMLGameRAMRollback::RequiredHistoryCount;
 
 void Require(bool condition, const std::string &message) {
   if (condition)
@@ -113,6 +115,23 @@ void TestRomLoopTransactionCompletionPolicy() {
           "empty history cannot finalize");
   Require(!CanFinalizeTransaction(false, false, true, 8, 8, 2, 0xFFFFFFFE),
           "wrapped game-frame interval cannot finalize");
+}
+
+void TestRomLoopHistoryBoundaryPolicy() {
+  Require(RequiredHistoryCount(100, 100) == 2,
+          "same-frame history includes the following logical input gate");
+  Require(RequiredHistoryCount(100, 105) == 7,
+          "history replays from the checkpoint through current plus one");
+  Require(RequiredHistoryCount(105, 100) == 0,
+          "backwards history range is rejected");
+  Require(RequiredHistoryCount(0xFFFFFFFE, 0xFFFFFFFF) == 0,
+          "history range that cannot represent the following frame is rejected");
+  Require(RequiredHistoryCount(0, 0xFFFFFFFE) == 0,
+          "overflowing history count is rejected");
+  Require(MaxRollbackDepthForHistory(12) == 10,
+          "twelve history entries leave room for both inclusive boundaries");
+  Require(MaxRollbackDepthForHistory(1) == 0,
+          "undersized history cannot accept rollback depth");
 }
 
 void TestRomLoopCheckpointFrameTimeline() {
@@ -313,6 +332,7 @@ int main() {
   TestCheckpointBytes();
   TestRollbackPolicies();
   TestRomLoopTransactionCompletionPolicy();
+  TestRomLoopHistoryBoundaryPolicy();
   TestRomLoopCheckpointFrameTimeline();
   TestRestoreChain();
   TestPrepareSaveModes();
