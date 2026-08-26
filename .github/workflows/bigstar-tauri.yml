@@ -292,7 +292,7 @@ jobs:
           BIGSTAR_BUILD_PROFILE: distribution
           BIGSTAR_EDITION: public
         run: pnpm vite:build
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
       - name: Check ROM generator
         run: cargo check --manifest-path tools/bigstar-rom/Cargo.toml
 
@@ -373,7 +373,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.checkout_ref }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
       - name: Restore bridge Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -420,7 +420,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
       - name: Restore Tauri Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
