@@ -28,13 +28,15 @@ constexpr melonDS::u32 kRomLoopHistoryIndexAddress = 0x02001AD0;
 constexpr melonDS::u32 kRomLoopHistoryCountAddress = 0x02001AD4;
 constexpr melonDS::u32 kRomLoopHistoryTargetAddress = 0x02001AD8;
 constexpr melonDS::u32 kRomLoopHistoryStartFrameAddress = 0x02001ADC;
-constexpr melonDS::u32 kRomLoopHistoryAddress = 0x02001AE0;
 constexpr melonDS::u32 kPacketBridgeScratchTickAddress = 0x023C1200;
 constexpr melonDS::u32 kPacketBridgeScratchKeysAddress = 0x023C1208;
-constexpr melonDS::u32 kRomLoopMagic = 0x52505447;
-// The injected input gate starts at 0x02001B40, leaving twelve 8-byte entries
-// between kRomLoopHistoryAddress and the gate. Lead-8 live play can need more
-// than eight entries when the latest checkpoint predates the mismatch frame.
+constexpr melonDS::u32 kPacketBridgeScratchPacketsAddress = 0x023C1240;
+constexpr melonDS::u32 kRomLoopHistoryAddress = 0x023C1300;
+constexpr melonDS::u32 kRomLoopHistoryEntrySize = 16;
+constexpr melonDS::u32 kRomLoopMagic = 0x32505447;
+// Lead-8 live play can need more than eight entries when the latest checkpoint
+// predates the mismatch frame. The dedicated scratch history keeps all twelve
+// entries while adding the two per-player action/touch/x/y words.
 constexpr melonDS::u32 kRomLoopHistoryCapacity = 12;
 using StoredState = RollbackStorage::StoredState;
 
@@ -649,6 +651,8 @@ bool ResimulateIfNeeded(Context context, const ResimulationHooks &hooks,
       melonDS::u16 Tick = 0;
       melonDS::u16 Keys0 = 0;
       melonDS::u16 Keys1 = 0;
+      melonDS::u32 Player0Metadata = 0;
+      melonDS::u32 Player1Metadata = 0;
     };
     std::vector<InputTimeline::ReplayFrameInputs> resolvedInputs;
     resolvedInputs.reserve(transactionFrames);
@@ -679,6 +683,8 @@ bool ResimulateIfNeeded(Context context, const ResimulationHooks &hooks,
           nds->ARM9Read16(kPacketBridgeScratchTickAddress),
           nds->ARM9Read16(kPacketBridgeScratchKeysAddress),
           nds->ARM9Read16(kPacketBridgeScratchKeysAddress + 2),
+          nds->ARM9Read32(kPacketBridgeScratchPacketsAddress + 4),
+          nds->ARM9Read32(kPacketBridgeScratchPacketsAddress + 0x40 + 4),
       });
     }
 
@@ -702,11 +708,16 @@ bool ResimulateIfNeeded(Context context, const ResimulationHooks &hooks,
     nds->ARM9Write32(kRomLoopHistoryTargetAddress, 1);
     nds->ARM9Write32(kRomLoopHistoryStartFrameAddress, checkpoint.GameFrame);
     for (melonDS::u32 index = 0; index < transactionFrames; index++) {
-      const melonDS::u32 entryAddress = kRomLoopHistoryAddress + index * 8;
+      const melonDS::u32 entryAddress =
+          kRomLoopHistoryAddress + index * kRomLoopHistoryEntrySize;
       nds->ARM9Write16(entryAddress, replayInputs[index].Tick);
       nds->ARM9Write16(entryAddress + 2, replayInputs[index].Keys0);
       nds->ARM9Write16(entryAddress + 4, replayInputs[index].Keys1);
       nds->ARM9Write16(entryAddress + 6, 0);
+      nds->ARM9Write32(entryAddress + 8,
+                       replayInputs[index].Player0Metadata);
+      nds->ARM9Write32(entryAddress + 12,
+                       replayInputs[index].Player1Metadata);
     }
     nds->ARM9Write32(kRomLoopHistoryEnabledAddress, 1);
     nds->ARM9Write32(0x02001AC4, 0);

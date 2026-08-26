@@ -1894,10 +1894,12 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
     constexpr u32 historyCountAddr = 0x02001AD4;
     constexpr u32 historyTargetAddr = 0x02001AD8;
     constexpr u32 historyStartFrameAddr = 0x02001ADC;
-    constexpr u32 historyAddr = 0x02001AE0;
+    constexpr u32 historyAddr = 0x023C1300;
     constexpr u32 scratchTickAddr = 0x023C1200;
     constexpr u32 scratchKeysAddr = 0x023C1208;
-    constexpr u32 magic = 0x52505447;
+    constexpr u32 scratchPacketsAddr = 0x023C1240;
+    constexpr u32 historyEntrySize = 16;
+    constexpr u32 magic = 0x32505447;
     constexpr std::array<u16, 7> player0Keys = {0x010, 0x011, 0x000, 0x020, 0x001, 0x810, 0x000};
     constexpr std::array<u16, 7> player1Keys = {0x020, 0x022, 0x000, 0x010, 0x002, 0x820, 0x000};
 
@@ -1925,6 +1927,8 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
             u16 Tick = 0;
             u16 Keys0 = 0;
             u16 Keys1 = 0;
+            u32 Player0Metadata = 0;
+            u32 Player1Metadata = 0;
             std::vector<u8> MainRAM;
         };
 
@@ -2053,6 +2057,8 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
         snapshot.Tick = nds->ARM9Read16(scratchTickAddr);
         snapshot.Keys0 = nds->ARM9Read16(scratchKeysAddr);
         snapshot.Keys1 = nds->ARM9Read16(scratchKeysAddr + 2);
+        snapshot.Player0Metadata = nds->ARM9Read32(scratchPacketsAddr + 4);
+        snapshot.Player1Metadata = nds->ARM9Read32(scratchPacketsAddr + 0x40 + 4);
         memcpy(snapshot.MainRAM.data(), nds->MainRAM, length);
         const auto saveElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - saveStart);
@@ -2075,6 +2081,8 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
             u16 Tick;
             u16 Keys0;
             u16 Keys1;
+            u32 Player0Metadata;
+            u32 Player1Metadata;
         };
         std::vector<ReplayInput> replayInputs;
         bool gameRAMRestoreReady = !cfg.GameRAMRollback || !isTarget;
@@ -2094,7 +2102,8 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
                     if (snapshot.DisplayFrame >= restoreFrame &&
                         snapshot.DisplayFrame <= nds->NumFrames)
                         replayInputs.push_back(
-                            {snapshot.DisplayFrame, snapshot.Tick, snapshot.Keys0, snapshot.Keys1});
+                            {snapshot.DisplayFrame, snapshot.Tick, snapshot.Keys0, snapshot.Keys1,
+                                snapshot.Player0Metadata, snapshot.Player1Metadata});
                 }
                 std::sort(replayInputs.begin(), replayInputs.end(),
                     [](const ReplayInput& left, const ReplayInput& right)
@@ -2159,17 +2168,28 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
             const u16 keys1 = useReplayInput
                 ? replayInputs[index].Keys1
                 : player1Keys[index];
-            const u32 entryAddr = historyAddr + index * 8;
+            const u32 player0Metadata = useReplayInput
+                ? replayInputs[index].Player0Metadata
+                : 0;
+            const u32 player1Metadata = useReplayInput
+                ? replayInputs[index].Player1Metadata
+                : 0;
+            const u32 entryAddr = historyAddr + index * historyEntrySize;
             nds->ARM9Write16(entryAddr, tick);
             nds->ARM9Write16(entryAddr + 2, keys0);
             nds->ARM9Write16(entryAddr + 4, keys1);
             nds->ARM9Write16(entryAddr + 6, 0);
-            for (const u16 value : {tick, keys0, keys1})
+            nds->ARM9Write32(entryAddr + 8, player0Metadata);
+            nds->ARM9Write32(entryAddr + 12, player1Metadata);
+            for (const u32 value : {
+                     static_cast<u32>(tick), static_cast<u32>(keys0),
+                     static_cast<u32>(keys1), player0Metadata, player1Metadata})
             {
-                state.InputSequenceHash ^= value & 0xFF;
-                state.InputSequenceHash *= 16777619u;
-                state.InputSequenceHash ^= value >> 8;
-                state.InputSequenceHash *= 16777619u;
+                for (u32 shift = 0; shift < 32; shift += 8)
+                {
+                    state.InputSequenceHash ^= (value >> shift) & 0xFF;
+                    state.InputSequenceHash *= 16777619u;
+                }
             }
         }
         nds->ARM9Write32(historyEnabledAddr, 1);
@@ -2245,6 +2265,8 @@ static void HandleNSMLRomGameTickProbeFrameBoundary(NDS* nds, bool beforeFrame)
         nds->ARM9Write16(historyAddr + 2, 0);
         nds->ARM9Write16(historyAddr + 4, 0);
         nds->ARM9Write16(historyAddr + 6, 0);
+        nds->ARM9Write32(historyAddr + 8, 0);
+        nds->ARM9Write32(historyAddr + 12, 0);
         nds->ARM9Write32(historyIndexAddr, 0);
         nds->ARM9Write32(historyCountAddr, 1);
         nds->ARM9Write32(historyTargetAddr, isTarget ? 1 : 0);
@@ -2507,9 +2529,11 @@ void NDS::ApplyNSMLPendingGameRAMRestore()
     }
 
     constexpr u32 controlOffset = 0x1AC0;
-    // Preserve the control header and all twelve history entries up to the
-    // injected input gate at 0x02001B40.
-    constexpr u32 controlLength = 0x80;
+    // The control header remains in the ROM's low scratch area. Replay history
+    // lives in a dedicated high scratch interval and is preserved separately.
+    constexpr u32 controlLength = 0x20;
+    constexpr u32 historyOffset = 0x3C1300;
+    constexpr u32 historyLength = 12 * 16;
     constexpr u32 historyCountAddr = 0x02001AD4;
     constexpr u32 historyStartFrameAddr = 0x02001ADC;
     constexpr u32 gameFrameAddr = 0x0208B668;
@@ -2541,6 +2565,9 @@ void NDS::ApplyNSMLPendingGameRAMRestore()
 
     std::array<u8, controlLength> control {};
     memcpy(control.data(), MainRAM + controlOffset, control.size());
+    std::array<u8, historyLength> history {};
+    static_assert(historyOffset + historyLength <= 0x400000);
+    memcpy(history.data(), MainRAM + historyOffset, history.size());
 
     if (getenv("MELONDS_NSML_ROM_GAME_TICK_PROBE_STAGE_TRACE"))
     {
@@ -2564,6 +2591,7 @@ void NDS::ApplyNSMLPendingGameRAMRestore()
                length - sdkRuntimeEnd);
     }
     memcpy(MainRAM + controlOffset, control.data(), control.size());
+    memcpy(MainRAM + historyOffset, history.data(), history.size());
     const auto restoreElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - restoreStart);
     NSMLGameRAMRestoreUs = static_cast<unsigned long long>(restoreElapsed.count());

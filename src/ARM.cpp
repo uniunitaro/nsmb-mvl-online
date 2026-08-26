@@ -100,12 +100,21 @@ static u32 NSMLMvlStage()
     return std::min(stage, 4u);
 }
 
+static bool NSMLRomLoopRollbackConfigured()
+{
+    const char* backend = getenv("MELONDS_NSML_ROLLBACK_BACKEND");
+    return backend &&
+        (!strcmp(backend, "romloop") || !strcmp(backend, "rom-loop") ||
+         !strcmp(backend, "slippi"));
+}
+
 static bool NSMLRuntimeHooksMaybeEnabled()
 {
 #ifdef NSML_CORE_RUNTIME_HOOKS_DISABLED
     return false;
 #else
     static const bool enabled =
+        NSMLRomLoopRollbackConfigured() ||
         NSMLEnvFlag("MELONDS_NSML_PACKET_BRIDGE") ||
         NSMLEnvFlag("MELONDS_NSML_PACKET_CAPTURE_LOG") ||
         NSMLEnvFlag("MELONDS_NSML_PACKET_REPLAY_FILE") ||
@@ -230,7 +239,7 @@ static bool HandleNSMLRomGameTickProbe(ARM* cpu, u32 instrAddr)
     constexpr u32 requestAddr = 0x02001AC0;
     constexpr u32 activeAddr = 0x02001AC4;
     constexpr u32 magicAddr = 0x02001AC8;
-    constexpr u32 magic = 0x52505447;
+    constexpr u32 magic = 0x32505447;
     constexpr u32 netPacketTickAddr = 0x020888E0;
     constexpr u32 scratchTickAddr = 0x023C1200;
     constexpr u32 scratchKeysAddr = 0x023C1208;
@@ -240,7 +249,8 @@ static bool HandleNSMLRomGameTickProbe(ARM* cpu, u32 instrAddr)
     constexpr u32 historyCountAddr = 0x02001AD4;
     constexpr u32 historyTargetAddr = 0x02001AD8;
     constexpr u32 historyStartFrameAddr = 0x02001ADC;
-    constexpr u32 historyAddr = 0x02001AE0;
+    constexpr u32 historyAddr = 0x023C1300;
+    constexpr u32 historyEntrySize = 16;
 
     if (instrAddr == loopStart)
         cpu->NDS.ApplyNSMLPendingGameRAMRestore();
@@ -392,6 +402,7 @@ static bool HandleNSMLRomGameTickProbe(ARM* cpu, u32 instrAddr)
                 const u16 keys = player == 0 ? keys0 : keys1;
                 cpu->NDS.ARM9Write16(packetAddr, tick);
                 cpu->NDS.ARM9Write16(packetAddr + 2, keys);
+                cpu->NDS.ARM9Write32(packetAddr + 4, 0);
             }
             hashHistoricalInput(tick, keys0, keys1);
         };
@@ -404,11 +415,13 @@ static bool HandleNSMLRomGameTickProbe(ARM* cpu, u32 instrAddr)
             for (u32 index = 0; index < cfg.ExtraTicks; index++)
             {
                 const u16 tick = static_cast<u16>((state.HistoricalBaseTick + index) & 0xFFFF);
-                const u32 entryAddr = historyAddr + index * 8;
+                const u32 entryAddr = historyAddr + index * historyEntrySize;
                 cpu->NDS.ARM9Write16(entryAddr, tick);
                 cpu->NDS.ARM9Write16(entryAddr + 2, player0Keys[index]);
                 cpu->NDS.ARM9Write16(entryAddr + 4, player1Keys[index]);
                 cpu->NDS.ARM9Write16(entryAddr + 6, 0);
+                cpu->NDS.ARM9Write32(entryAddr + 8, 0);
+                cpu->NDS.ARM9Write32(entryAddr + 12, 0);
                 hashHistoricalInput(tick, player0Keys[index], player1Keys[index]);
             }
             cpu->NDS.ARM9Write32(historyEnabledAddr, 1);

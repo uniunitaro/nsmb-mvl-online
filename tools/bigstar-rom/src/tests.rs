@@ -1,9 +1,11 @@
 use super::{
     big_star_selector, build_direct_loadlevel_stub, build_eight_coin_reward_positional_sfx_stub,
-    build_is_out_of_view_vertical_camera_fallback_stub, encode_cmp_imm, encode_ldr_imm,
-    encode_load_imm, encode_mov_imm, encode_str_imm, encode_strb_imm, initial_lives,
-    life_mode_selector, stage_scene_settings, with_cond, DirectMvlConfig, EIGHT_COIN_SFX_ID,
-    GAME_PLAYER_INVENTORY_POWERUP_ADDR, MVL_NATIVE_COURSE_SELECTOR_ADDR,
+    build_game_tick_input_gate, build_is_out_of_view_vertical_camera_fallback_stub,
+    encode_add_reg_lsl, encode_cmp_imm, encode_ldr_imm, encode_load_imm, encode_mov_imm,
+    encode_str_imm, encode_strb_imm, initial_lives, life_mode_selector, stage_scene_settings,
+    with_cond, DirectMvlConfig, EIGHT_COIN_SFX_ID, GAME_PLAYER_INVENTORY_POWERUP_ADDR,
+    GAME_TICK_PROBE_HISTORY_ADDR, GAME_TICK_PROBE_HISTORY_CAPACITY,
+    GAME_TICK_PROBE_HISTORY_ENTRY_BYTES, GAME_TICK_PROBE_MAGIC, MVL_NATIVE_COURSE_SELECTOR_ADDR,
     MVL_RUNTIME_CONFIG_STAGE_OFFSET, PLAYER_POWERUP_MEGA,
 };
 
@@ -189,5 +191,46 @@ fn vertical_out_of_view_fallback_preserves_player1_camera_slot() {
         stub.windows(2)
             .any(|window| window == [compare_height_zero, force_slot0]),
         "fallback should still use slot0 only when the requested camera height is zero"
+    );
+}
+
+#[test]
+fn game_tick_history_preserves_two_player_touch_metadata() {
+    const INPUT_GATE_ADDR: u32 = 0x0200_1b40;
+    const PROCESS_STAGE_GATE_ADDR: u32 = 0x0200_1d00;
+    const INPUT_UPDATE_ADDR: u32 = 0x0200_5230;
+    let gate = build_game_tick_input_gate(INPUT_GATE_ADDR, INPUT_UPDATE_ADDR)
+        .expect("build game-tick input gate");
+
+    assert_eq!(GAME_TICK_PROBE_MAGIC, 0x3250_5447);
+    assert_eq!(GAME_TICK_PROBE_HISTORY_ADDR, 0x023c_1300);
+    assert_eq!(GAME_TICK_PROBE_HISTORY_CAPACITY, 12);
+    assert_eq!(GAME_TICK_PROBE_HISTORY_ENTRY_BYTES, 16);
+    assert!(
+        INPUT_GATE_ADDR + gate.len() as u32 * 4 <= PROCESS_STAGE_GATE_ADDR,
+        "touch-capable input gate must fit before the process-stage gate"
+    );
+    assert!(
+        gate.contains(&GAME_TICK_PROBE_HISTORY_ADDR),
+        "gate must load replay entries from the dedicated scratch history"
+    );
+    assert!(
+        gate.contains(&encode_add_reg_lsl(2, 2, 12, 4).expect("encode 16-byte stride")),
+        "gate must index 16-byte history entries"
+    );
+    assert!(
+        gate.windows(2).any(|window| {
+            window
+                == [
+                    encode_ldr_imm(3, 2, 8).expect("encode player0 metadata load"),
+                    encode_ldr_imm(2, 2, 12).expect("encode player1 metadata load"),
+                ]
+        }),
+        "gate must load both players' action/touch/x/y words"
+    );
+    assert!(
+        gate.contains(&encode_str_imm(3, 14, 0x44).expect("encode player0 metadata store"))
+            && gate.contains(&encode_str_imm(2, 14, 0x84).expect("encode player1 metadata store"),),
+        "gate must restore both metadata words into JIT scratch packets"
     );
 }

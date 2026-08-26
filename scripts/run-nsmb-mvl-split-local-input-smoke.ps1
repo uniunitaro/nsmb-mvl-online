@@ -49,6 +49,8 @@ param(
     [string]$RollbackPredictionProbeKeyMask = "",
     [int]$RollbackPredictionProbeConfirmDelayFrames = 0,
     [switch]$RollbackPredictionProbeConfirmAfterOneFrame,
+    [ValidateSet("both", "host", "client")]
+    [string]$RollbackPredictionProbeRole = "both",
     [int]$RollbackInputWaitUs = 0,
     [int]$RollbackSettleFrames = 0,
     [switch]$IgnoreSpeculativeInputFields,
@@ -212,35 +214,44 @@ if ($FpsSpikeTrace -and ($MaxConsecutiveSlowFrames -ge 0 -or $MaxRollbackFrameMs
     Remove-Item Env:\MELONDS_NSML_FPS_SPIKE_THRESHOLD_MS -ErrorAction SilentlyContinue
 }
 
-if ($RollbackPredictionProbeModulo -gt 0) {
-    $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_MODULO = "$RollbackPredictionProbeModulo"
-    $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_OFFSET = "$RollbackPredictionProbeOffset"
-    $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_LIMIT = "$RollbackPredictionProbeLimit"
-    $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_START_FRAME = "$RollbackPredictionProbeStartFrame"
-    $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_END_FRAME = "$RollbackPredictionProbeEndFrame"
-    if ($RollbackPredictionProbeKeyMask -ne "") {
-        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_KEY_MASK = "$RollbackPredictionProbeKeyMask"
-    }
-    if ($RollbackPredictionProbeConfirmDelayFrames -gt 0) {
-        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_DELAY_FRAMES = "$RollbackPredictionProbeConfirmDelayFrames"
+function Set-RollbackPredictionProbeEnvForChild {
+    param([string]$Role)
+
+    $roleEnabled = $RollbackPredictionProbeRole -eq "both" -or $RollbackPredictionProbeRole -eq $Role
+    if ($RollbackPredictionProbeModulo -gt 0 -and $roleEnabled) {
+        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_MODULO = "$RollbackPredictionProbeModulo"
+        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_OFFSET = "$RollbackPredictionProbeOffset"
+        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_LIMIT = "$RollbackPredictionProbeLimit"
+        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_START_FRAME = "$RollbackPredictionProbeStartFrame"
+        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_END_FRAME = "$RollbackPredictionProbeEndFrame"
+        if ($RollbackPredictionProbeKeyMask -ne "") {
+            $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_KEY_MASK = "$RollbackPredictionProbeKeyMask"
+        } else {
+            Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_KEY_MASK -ErrorAction SilentlyContinue
+        }
+        if ($RollbackPredictionProbeConfirmDelayFrames -gt 0) {
+            $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_DELAY_FRAMES = "$RollbackPredictionProbeConfirmDelayFrames"
+        } else {
+            Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_DELAY_FRAMES -ErrorAction SilentlyContinue
+        }
+        if ($RollbackPredictionProbeConfirmAfterOneFrame) {
+            $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_AFTER_ONE_FRAME = "1"
+        } else {
+            Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_AFTER_ONE_FRAME -ErrorAction SilentlyContinue
+        }
     } else {
+        Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_MODULO -ErrorAction SilentlyContinue
+        Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_OFFSET -ErrorAction SilentlyContinue
+        Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_LIMIT -ErrorAction SilentlyContinue
+        Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_START_FRAME -ErrorAction SilentlyContinue
+        Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_END_FRAME -ErrorAction SilentlyContinue
+        Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_KEY_MASK -ErrorAction SilentlyContinue
         Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_DELAY_FRAMES -ErrorAction SilentlyContinue
-    }
-    if ($RollbackPredictionProbeConfirmAfterOneFrame) {
-        $env:MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_AFTER_ONE_FRAME = "1"
-    } else {
         Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_AFTER_ONE_FRAME -ErrorAction SilentlyContinue
     }
-} else {
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_MODULO -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_OFFSET -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_LIMIT -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_START_FRAME -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_END_FRAME -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_KEY_MASK -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_DELAY_FRAMES -ErrorAction SilentlyContinue
-    Remove-Item Env:\MELONDS_NSML_ROLLBACK_PREDICTION_PROBE_CONFIRM_AFTER_ONE_FRAME -ErrorAction SilentlyContinue
 }
+
+Set-RollbackPredictionProbeEnvForChild -Role "none"
 
 if ($RollbackInputWaitUs -gt 0) {
     $env:MELONDS_NSML_ROLLBACK_INPUT_WAIT_US = "$RollbackInputWaitUs"
@@ -657,6 +668,7 @@ function Restore-AIPlayLogEnv {
 $hostProc = $null
 $clientProc = $null
 try {
+    Set-RollbackPredictionProbeEnvForChild -Role "host"
     Set-AIPlayLogEnvForChild -Path $HostAIPlayLog
     $hostProc = Start-Process -FilePath "powershell.exe" `
         -ArgumentList $hostArgs `
@@ -668,6 +680,7 @@ try {
 
     Start-Sleep -Milliseconds $HostStartupDelayMs
 
+    Set-RollbackPredictionProbeEnvForChild -Role "client"
     Set-AIPlayLogEnvForChild -Path $ClientAIPlayLog
     $clientProc = Start-Process -FilePath "powershell.exe" `
         -ArgumentList $clientArgs `

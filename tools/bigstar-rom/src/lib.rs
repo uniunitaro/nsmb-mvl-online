@@ -33,12 +33,13 @@ const GAME_TICK_PROBE_HISTORY_INDEX_ADDR: u32 = 0x0200_1AD0;
 const GAME_TICK_PROBE_HISTORY_COUNT_ADDR: u32 = 0x0200_1AD4;
 const GAME_TICK_PROBE_HISTORY_TARGET_ADDR: u32 = 0x0200_1AD8;
 const GAME_TICK_PROBE_HISTORY_START_FRAME_ADDR: u32 = 0x0200_1ADC;
-const GAME_TICK_PROBE_HISTORY_ADDR: u32 = 0x0200_1AE0;
-// The input gate begins at 0x0200_1B40, so 0x0200_1AE0..0x0200_1B3F holds
-// twelve 8-byte history entries without overlapping injected code.
+// The JIT scratch packets occupy 0x023C1240..0x023C12B3. Keep the replay
+// history in the following reserved scratch page so all twelve entries can
+// retain per-player touch metadata without shrinking the rollback window.
+const GAME_TICK_PROBE_HISTORY_ADDR: u32 = 0x023C_1300;
 const GAME_TICK_PROBE_HISTORY_CAPACITY: usize = 12;
-const GAME_TICK_PROBE_HISTORY_ENTRY_WORDS: usize = 2;
-const GAME_TICK_PROBE_MAGIC: u32 = 0x5250_5447; // "GTPR", little endian
+const GAME_TICK_PROBE_HISTORY_ENTRY_BYTES: usize = 16;
+const GAME_TICK_PROBE_MAGIC: u32 = 0x3250_5447; // "GTP2", little endian
 const GAME_TICK_PROBE_PACKET_TICK_ADDR: u32 = 0x0208_88E0;
 const GAME_TICK_PROBE_JIT_SCRATCH_TICK_ADDR: u32 = 0x023C_1200;
 const GAME_TICK_PROBE_GAME_FRAME_ADDR: u32 = 0x0208_B668;
@@ -893,6 +894,12 @@ fn patch_game_tick_probe(rom: &mut RomImage) -> Result<()> {
     ];
     let input_gate = build_game_tick_input_gate(INPUT_GATE_ADDR, INPUT_UPDATE_ADDR)?;
     let process_stage_gate = build_game_tick_process_stage_gate(PROCESS_STAGE_GATE_ADDR)?;
+    let input_gate_end = INPUT_GATE_ADDR + input_gate.len() as u32 * 4;
+    if input_gate_end > PROCESS_STAGE_GATE_ADDR {
+        bail!(
+            "game-tick input gate overlaps process-stage gate: end=0x{input_gate_end:08x} limit=0x{PROCESS_STAGE_GATE_ADDR:08x}"
+        );
+    }
 
     ensure_zero_arm9_words(rom, LOOP_GATE_ADDR, loop_gate.len())?;
     ensure_zero_arm9_words(rom, FONT_GATE_ADDR, font_gate.len())?;
@@ -902,11 +909,6 @@ fn patch_game_tick_probe(rom: &mut RomImage) -> Result<()> {
     ensure_zero_arm9_words(rom, GAME_TICK_PROBE_REQUEST_ADDR, 2)?;
     ensure_zero_arm9_words(rom, GAME_TICK_PROBE_MAGIC_ADDR, 1)?;
     ensure_zero_arm9_words(rom, GAME_TICK_PROBE_HISTORY_ENABLED_ADDR, 5)?;
-    ensure_zero_arm9_words(
-        rom,
-        GAME_TICK_PROBE_HISTORY_ADDR,
-        GAME_TICK_PROBE_HISTORY_CAPACITY * GAME_TICK_PROBE_HISTORY_ENTRY_WORDS,
-    )?;
     patch_arm9_words(rom, LOOP_GATE_ADDR, &loop_gate)?;
     patch_arm9_words(rom, FONT_GATE_ADDR, &font_gate)?;
     patch_arm9_words(rom, RENDER_GATE_ADDR, &render_gate)?;
@@ -915,11 +917,6 @@ fn patch_game_tick_probe(rom: &mut RomImage) -> Result<()> {
     patch_arm9_words(rom, GAME_TICK_PROBE_REQUEST_ADDR, &[0, 0])?;
     patch_arm9_words(rom, GAME_TICK_PROBE_MAGIC_ADDR, &[GAME_TICK_PROBE_MAGIC])?;
     patch_arm9_words(rom, GAME_TICK_PROBE_HISTORY_ENABLED_ADDR, &[0, 0, 0, 0, 0])?;
-    patch_arm9_words(
-        rom,
-        GAME_TICK_PROBE_HISTORY_ADDR,
-        &[0; GAME_TICK_PROBE_HISTORY_CAPACITY * GAME_TICK_PROBE_HISTORY_ENTRY_WORDS],
-    )?;
 
     patch_arm9_word_checked(
         rom,
@@ -1031,6 +1028,21 @@ fn build_game_tick_process_stage_gate(start_addr: u32) -> Result<Vec<u32>> {
 }
 
 fn build_game_tick_input_gate(start_addr: u32, input_update_addr: u32) -> Result<Vec<u32>> {
+    if GAME_TICK_PROBE_HISTORY_ENTRY_BYTES != 16 {
+        bail!(
+            "unsupported game-tick history entry size: {}",
+            GAME_TICK_PROBE_HISTORY_ENTRY_BYTES
+        );
+    }
+    let history_bytes = GAME_TICK_PROBE_HISTORY_CAPACITY
+        .checked_mul(GAME_TICK_PROBE_HISTORY_ENTRY_BYTES)
+        .context("game-tick history size overflow")?;
+    let history_end = GAME_TICK_PROBE_HISTORY_ADDR
+        .checked_add(history_bytes as u32)
+        .context("game-tick history address overflow")?;
+    if history_end > 0x0240_0000 {
+        bail!("game-tick history exceeds Main RAM: end=0x{history_end:08x}");
+    }
     let mut words = Vec::new();
     let mut literals = Vec::new();
     let mut refs: Vec<(usize, u8, usize, u8)> = Vec::new();
@@ -1104,20 +1116,28 @@ fn build_game_tick_input_gate(start_addr: u32, input_update_addr: u32) -> Result
     words.push(encode_mov_imm(1, 2)?);
     words.push(encode_str_imm(1, 2, 0)?);
     emit(&mut words, 2, GAME_TICK_PROBE_HISTORY_ADDR);
-    words.push(encode_add_reg_lsl(2, 2, 12, 3)?);
+    words.push(encode_add_reg_lsl(2, 2, 12, 4)?);
     words.push(encode_ldrh_imm(0, 2, 0)?);
     words.push(encode_ldrh_imm(1, 2, 2)?);
     words.push(encode_ldrh_imm(12, 2, 4)?);
-    emit(&mut words, 2, GAME_TICK_PROBE_JIT_SCRATCH_TICK_ADDR);
-    words.push(encode_strh_imm(0, 2, 0)?);
-    words.push(encode_strh_imm(1, 2, 8)?);
-    words.push(encode_strh_imm(12, 2, 10)?);
-    words.push(encode_strh_imm(0, 2, 0x40)?);
-    words.push(encode_strh_imm(1, 2, 0x42)?);
-    words.push(encode_strh_imm(0, 2, 0x80)?);
-    words.push(encode_strh_imm(12, 2, 0x82)?);
+    // Each metadata word is the packet's action/touch/x/y bytes at +4..+7.
+    // Loading and storing the full word keeps both touch transitions and
+    // coordinates exact while avoiding byte-unpack instructions in the gate.
+    words.push(encode_ldr_imm(3, 2, 8)?);
+    words.push(encode_ldr_imm(2, 2, 12)?);
+    emit(&mut words, 14, GAME_TICK_PROBE_JIT_SCRATCH_TICK_ADDR);
+    words.push(encode_strh_imm(0, 14, 0)?);
+    words.push(encode_strh_imm(1, 14, 8)?);
+    words.push(encode_strh_imm(12, 14, 10)?);
+    words.push(encode_strh_imm(0, 14, 0x40)?);
+    words.push(encode_strh_imm(1, 14, 0x42)?);
+    words.push(encode_str_imm(3, 14, 0x44)?);
+    words.push(encode_strh_imm(0, 14, 0x80)?);
+    words.push(encode_strh_imm(12, 14, 0x82)?);
+    words.push(encode_str_imm(2, 14, 0x84)?);
     emit(&mut words, 2, GAME_TICK_PROBE_PACKET_TICK_ADDR);
     words.push(encode_strh_imm(0, 2, 0)?);
+    emit(&mut words, 3, GAME_TICK_PROBE_HISTORY_INDEX_ADDR);
     words.push(encode_ldr_imm(2, 3, 0)?);
     words.push(encode_add_imm(2, 2, 1)?);
     words.push(encode_str_imm(2, 3, 0)?);
